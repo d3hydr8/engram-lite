@@ -24,6 +24,8 @@ engram-lite is that serving layer, small enough to run on your laptop:
 pip install engram-lite
 ```
 
+On a Mac with Homebrew Python (`externally-managed-environment` error), use `pipx install engram-lite` or a virtualenv. Installing for a Hermes agent? Skip this — `hermes memory setup` installs it into Hermes's own environment automatically.
+
 Or Docker (memory persists in the named volume):
 
 ```bash
@@ -84,6 +86,8 @@ hermes memory setup     # choose "engram", answer one question — what is this
                         # agent? (e.g. "DevOps engineer") — everything else is
                         # derived; leave it empty for plain memory
 ```
+
+(Working from a clone or a zip instead? One command does both steps: `./install-hermes.sh`)
 
 Then just `hermes chat`. From that point: every turn is auto-captured through the salience gate, the agent boots with a snapshot of what it already knows, and `memory_search` / `memory_write` / `memory_diagnose` are available as in-loop tools. Restart the agent; it remembers. Point several agents at one `db_path` (a wizard field) and the lane model keeps each one's serving scoped.
 
