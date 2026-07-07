@@ -148,6 +148,16 @@ def facts_by_origin(conn: sqlite3.Connection, origin: str, limit: int) -> List[s
     ).fetchall()
 
 
+def facts_by_domain(conn: sqlite3.Connection, domain: str, limit: int) -> List[sqlite3.Row]:
+    if not domain:
+        return []
+    return conn.execute(
+        "SELECT * FROM facts WHERE superseded_by IS NULL "
+        "AND validation_status = 'fresh' AND domain = ? LIMIT ?",
+        (domain, limit),
+    ).fetchall()
+
+
 # ── decision ledger (explainable forgetting) ──────────────────────────────────
 def record_decision(conn: sqlite3.Connection, kind: str, rule: str,
                     snippet: str = "") -> None:

@@ -416,6 +416,17 @@ class Memory:
                                            query)
                 return []
         if not task_tags:
+            sem_scores, sem_floor, engaged = self._lane_scores(candidates, prof, query)
+            if sem_scores and engaged:
+                idf = promotion.idf_weights(
+                    [json.loads(t) for t in repository.all_current_tags(self.conn)])
+                served = promotion.promote(candidates, prof, [], query, k, idf=idf,
+                                           sem_scores=sem_scores, sem_floor=sem_floor)
+                served = retrieval.collapse_near_dups(served)
+                if served:
+                    for s in served:
+                        repository.touch_access(self.conn, s["id"])
+                    return served
             # nothing to build a lane from: fall back to flat, honestly flagged —
             # but the hard domain partition STILL holds. Without this, a tagless
             # query is a hole in conditioning: any agent could be served any
@@ -458,35 +469,9 @@ class Memory:
                     continue
                 candidates.append(row)
 
-        sem_scores = None
-        sem_floor = None
-        if lanes.active(self.embedder):
-            built = lanes.build(self.conn, self.embedder,
-                                prof["scope_tags"], prof["agent"])
-            if built is not None:
-                centre, sem_floor = built
-                today = repository.today_iso()
-                seen_ids = {c["id"] for c in candidates}
-                extra = list(repository.facts_by_origin(
-                    self.conn, prof["agent"], config.LANE_FETCH_LIMIT))
-                for fid, _ in repository.nearest(self.conn, centre,
-                                                 config.LANE_FETCH_LIMIT):
-                    row = repository.get(self.conn, fid)
-                    if row is not None:
-                        extra.append(row)
-                for r in extra:
-                    row = self._parse(dict(r))
-                    if row["id"] in seen_ids:
-                        continue
-                    if row.get("superseded_by") is not None \
-                            or row.get("validation_status") != "fresh":
-                        continue
-                    if validate and row["valid_until"] and row["valid_until"] < today:
-                        continue
-                    seen_ids.add(row["id"])
-                    candidates.append(row)
-                sem_scores = lanes.scores(self.conn, centre,
-                                          [c["id"] for c in candidates])
+        sem_scores, sem_floor, engaged = self._lane_scores(candidates, prof, query)
+        if not (engaged or lane):
+            sem_scores, sem_floor = None, None
         idf = promotion.idf_weights(
             [json.loads(t) for t in repository.all_current_tags(self.conn)])
         served = promotion.promote(candidates, prof, task_tags, query, k, idf=idf,
@@ -519,15 +504,7 @@ class Memory:
                       # same expiry guard as search(): 'fresh' status alone does
                       # not mean unexpired until the sweep has run
                       if not (row["valid_until"] and row["valid_until"] < today)]
-        sem_scores = None
-        sem_floor = None
-        if lanes.active(self.embedder):
-            built = lanes.build(self.conn, self.embedder,
-                                prof["scope_tags"], prof["agent"])
-            if built is not None:
-                centre, sem_floor = built
-                sem_scores = lanes.scores(self.conn, centre,
-                                          [c["id"] for c in candidates])
+        sem_scores, sem_floor, _ = self._lane_scores(candidates, prof, None)
         idf = promotion.idf_weights(
             [json.loads(t) for t in repository.all_current_tags(self.conn)])
         served = promotion.promote(candidates, prof, prof["scope_tags"],
@@ -622,6 +599,18 @@ class Memory:
         raw = out.get("tags")
         out["tags"] = json.loads(raw) if isinstance(raw, str) else (raw or [])
         return out
+
+    def _lane_scores(self, candidates, prof, query):
+        if not lanes.active(self.embedder):
+            return None, None, False
+        built = lanes.build(self.conn, self.embedder, prof)
+        if built is None:
+            return None, None, False
+        centre, sem_floor = built
+        sem_scores = lanes.scores(self.conn, centre, [c["id"] for c in candidates])
+        engaged = bool(query) and lanes.query_similarity(
+            self.embedder, query, centre) >= sem_floor
+        return sem_scores, sem_floor, engaged
 
     def _insert(self, key, value, vec, block_id, fragment_type,
                 volatility_class, valid_until, prior_version_id=None,
