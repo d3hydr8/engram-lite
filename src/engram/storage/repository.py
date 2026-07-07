@@ -329,6 +329,16 @@ def nearest(conn: sqlite3.Connection, qvec, k: int) -> List[Tuple[str, float]]:
     return [(r[0], r[1]) for r in rows]
 
 
+def vectors_for(conn: sqlite3.Connection, fids: List[str]) -> List[Tuple[str, bytes]]:
+    out: List[Tuple[str, bytes]] = []
+    for fid in fids:
+        row = conn.execute(
+            "SELECT embedding FROM facts_vec WHERE fact_id = ?", (fid,)).fetchone()
+        if row is not None and row[0] is not None:
+            out.append((fid, row[0]))
+    return out
+
+
 def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
     row = conn.execute("SELECT value FROM store_meta WHERE key = ?", (key,)).fetchone()
     return row[0] if row else None

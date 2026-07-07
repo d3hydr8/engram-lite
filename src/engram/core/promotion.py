@@ -31,6 +31,7 @@ import re
 from typing import Dict, List, Optional
 
 from .. import config
+from . import rrf
 
 _STOPWORDS = {
     "the", "is", "a", "an", "of", "it", "to", "and", "from", "at", "in", "on",
@@ -66,6 +67,8 @@ def promote(
     k: int,
     idf: Optional[Dict[str, float]] = None,
     floor_frac: float = config.PROMOTION_FLOOR_FRAC,
+    sem_scores: Optional[Dict[str, float]] = None,
+    sem_floor: Optional[float] = None,
 ) -> List[dict]:
     """Rank access-filtered candidates for ONE agent. May return fewer than k, or [].
 
@@ -74,6 +77,12 @@ def promote(
     Returns the served facts, each with a `promotion` dict attached:
         {"score": float, "lane": [tags hit], "mode": "lane-v1"}.
     """
+    if sem_scores and sem_floor is not None:
+        if idf is None:
+            idf = idf_weights([f.get("tags") or [] for f in candidates])
+        return _promote_semantic(candidates, profile, task_tags, query, k, idf,
+                                 sem_scores, sem_floor, floor_frac)
+
     lane = set(task_tags) & set(profile.get("scope_tags") or [])
     if not lane:
         return []  # this agent has no stake in this situation -> abstain
@@ -140,6 +149,96 @@ def promote(
             served.append(out)
         own.sort(key=lambda t: t[1], reverse=True)   # fresher first
         own.sort(key=lambda t: t[0], reverse=True)   # query overlap dominates (stable)
+        for overlap, _, f in own:
+            if len(served) >= k:
+                break
+            if f.get("id") in seen:
+                continue
+            seen.add(f.get("id"))
+            out = dict(f)
+            out["promotion"] = {"score": overlap, "lane": [], "mode": "origin-v1",
+                                "reason": "own capture, vocabulary-untagged"}
+            served.append(out)
+    return served
+
+
+def _promote_semantic(
+    candidates: List[dict],
+    profile: dict,
+    task_tags: List[str],
+    query: str,
+    k: int,
+    idf: Dict[str, float],
+    sem_scores: Dict[str, float],
+    sem_floor: float,
+    floor_frac: float,
+) -> List[dict]:
+    lane = set(task_tags) & set(profile.get("scope_tags") or [])
+    agent_label = profile.get("agent")
+    agent_domain = profile.get("domain")
+
+    pool: List[tuple] = []
+    own: List[tuple] = []
+    for f in candidates:
+        if agent_domain and f.get("domain") and f["domain"] != agent_domain:
+            continue
+        hit = set(f.get("tags") or []) & lane
+        cos = sem_scores.get(f.get("id"))
+        in_lane = cos is not None and cos >= sem_floor
+        if not hit and not in_lane:
+            if agent_label and f.get("origin_tool") == agent_label:
+                own.append((word_overlap(f.get("value", ""), query),
+                            f.get("created_at") or "", f))
+            continue
+        pool.append((f, hit, cos))
+
+    served: List[dict] = []
+    spill: List[tuple] = []
+    if pool:
+        tag_ids = [p[0].get("id") for p in sorted(
+            (p for p in pool if p[1]),
+            key=lambda p: (-sum(idf.get(t, 0.0) for t in p[1]),
+                           p[0].get("created_at") or "", p[0].get("key") or ""))]
+        sem_ids = [p[0].get("id") for p in sorted(
+            (p for p in pool if p[2] is not None),
+            key=lambda p: (-p[2], p[0].get("created_at") or "", p[0].get("key") or ""))]
+        fused = rrf.fuse_scores([tag_ids, sem_ids])
+
+        ordered = sorted(pool, key=lambda p: (-fused.get(p[0].get("id"), 0.0),
+                                              p[0].get("created_at") or "",
+                                              p[0].get("key") or ""))
+        top = fused.get(ordered[0][0].get("id"), 0.0)
+        for f, hit, cos in ordered:
+            score = fused.get(f.get("id"), 0.0)
+            if len(served) < k and (not top or score >= floor_frac * top):
+                out = dict(f)
+                if hit:
+                    out["promotion"] = {"score": round(score, 4),
+                                        "lane": sorted(hit), "mode": "lane-v2"}
+                else:
+                    out["promotion"] = {"score": round(score, 4), "lane": [],
+                                        "mode": "lane-sem-v1",
+                                        "reason": "semantic in-lane",
+                                        "similarity": round(cos, 4)}
+                served.append(out)
+            elif agent_label and f.get("origin_tool") == agent_label:
+                spill.append((f, hit))
+
+    if len(served) < k and (spill or own):
+        seen = {s.get("id") for s in served}
+        for f, hit in spill:
+            if len(served) >= k:
+                break
+            if f.get("id") in seen:
+                continue
+            seen.add(f.get("id"))
+            out = dict(f)
+            out["promotion"] = {"score": round(sum(idf.get(t, 0.0) for t in hit), 4),
+                                "lane": sorted(hit), "mode": "origin-v1",
+                                "reason": "own capture, below lane floor"}
+            served.append(out)
+        own.sort(key=lambda t: t[1], reverse=True)
+        own.sort(key=lambda t: t[0], reverse=True)
         for overlap, _, f in own:
             if len(served) >= k:
                 break
