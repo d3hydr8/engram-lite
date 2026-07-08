@@ -23,7 +23,7 @@ from typing import List, Optional
 
 from .. import config
 from ..storage import repository
-from . import anchors, entities, rrf
+from . import anchors, corpus, entities, rrf
 
 
 def _cosine_from_l2(distance: float) -> float:
@@ -31,9 +31,9 @@ def _cosine_from_l2(distance: float) -> float:
     return 1.0 - (distance * distance) / 2.0
 
 
-def _fts_query(text: str) -> str:
+def _fts_query(text: str, stop) -> str:
     """Free text → FTS5 OR-query of meaningful word tokens (stopwords dropped)."""
-    tokens = [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in config.STOPWORDS]
+    tokens = [t for t in re.findall(r"[a-z0-9]+", text.lower()) if t not in stop]
     return " OR ".join(tokens)
 
 
@@ -100,6 +100,7 @@ def search(conn, embedder, query: str, block_id: Optional[str] = None,
            k: int = config.DEFAULT_TOP_K, validate: bool = True,
            touch: bool = True) -> List[dict]:
     qvec = embedder.embed(query)
+    stop = corpus.stoplist(conn)
     n = max(config.CANDIDATES_PER_CHANNEL, k)
     # NOTE on channel depth (measured, LoCoMo ablation 2026-07-05): scaling n
     # with store size was tried to fix mid-rank facts being unreachable at
@@ -108,9 +109,9 @@ def search(conn, embedder, query: str, block_id: Optional[str] = None,
     # three channels outscores a fact at rank 5 in one). Deepening the pull
     # needs rank-windowed fusion first; until then, fixed depth wins.
 
-    keyword_ids = repository.keyword_search(conn, _fts_query(query), n)
+    keyword_ids = repository.keyword_search(conn, _fts_query(query, stop), n)
     near = repository.nearest(conn, qvec, n)                       # [(fid, distance)]
-    query_entities = entities.extract(query)
+    query_entities = entities.extract(query, stop)
     entity_ids = repository.entity_search(conn, query_entities, n) if query_entities else []
 
     # multi-entity questions ("How long after adopting Biscuit did Caroline
@@ -120,7 +121,7 @@ def search(conn, embedder, query: str, block_id: Optional[str] = None,
     # entity unions each entity's strongest facts into the candidate pool.
     if len(query_entities) >= 2:
         for ent in sorted(query_entities)[:4]:
-            for fid in repository.keyword_search(conn, _fts_query(ent), n // 2):
+            for fid in repository.keyword_search(conn, _fts_query(ent, stop), n // 2):
                 if fid not in keyword_ids:
                     keyword_ids.append(fid)
 

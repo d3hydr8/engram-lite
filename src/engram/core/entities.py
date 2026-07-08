@@ -36,8 +36,9 @@ _ENTITY_STOP = {
 } | config.STOPWORDS
 
 
-def extract(text: str) -> List[str]:
+def extract(text: str, stop=None) -> List[str]:
     """Return the normalized, de-duplicated entities mentioned in `text`."""
+    stops = _ENTITY_STOP if stop is None else (_ENTITY_STOP | set(stop))
     found: List[str] = []
     for m in _PROPER.finditer(text):
         found.append(m.group(0))
@@ -52,7 +53,7 @@ def extract(text: str) -> List[str]:
     seen: set[str] = set()
     for raw in found:
         ent = raw.strip().lower()
-        if len(ent) < config.ENTITY_MIN_LEN or ent.isdigit() or ent in _ENTITY_STOP:
+        if len(ent) < config.ENTITY_MIN_LEN or ent.isdigit() or ent in stops:
             continue
         if ent in seen:
             continue

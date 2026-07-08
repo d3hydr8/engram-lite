@@ -29,6 +29,7 @@ from ..embeddings import Embedder, get_embedder
 from ..storage import db, repository
 from . import (
     compaction,
+    corpus,
     dates,
     consolidation,
     entities,
@@ -402,8 +403,9 @@ class Memory:
             # conditioning — treating them as a lane caused a TOTAL silent
             # serving blackout for integrations that stamp every call with
             # them (loss census P1). Strip them; what remains decides the path.
+            generic = config.GENERIC_TASK_TAGS | corpus.generic_tags(self.conn)
             task_tags = [t for t in task_tags
-                         if tagging.normalize(t) not in config.GENERIC_TASK_TAGS]
+                         if tagging.normalize(t) not in generic]
             # canonicalize model-chosen task tags too ('migration' → 'migrations')
             supplied = task_tags
             task_tags = tagging.canonicalize(task_tags, self.vocabulary())
@@ -617,7 +619,7 @@ class Memory:
                 tags_json: str = "[]", domain: Optional[str] = None,
                 created_at: Optional[str] = None) -> str:
         fid = str(uuid.uuid4())
-        ents = entities.extract(f"{key} {value}")   # index the fact's entities
+        ents = entities.extract(f"{key} {value}", corpus.stoplist(self.conn))
         repository.insert_fact(
             self.conn, fid=fid, block_id=block_id, subject_key=block_id,
             key=key, value=value, fragment_type=fragment_type, confidence=1.0,

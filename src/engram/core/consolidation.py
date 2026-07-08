@@ -22,7 +22,7 @@ from typing import Optional, Tuple
 
 from .. import config
 from ..storage import repository
-from . import anchors
+from . import anchors, corpus
 
 # words/markers that flip a statement's polarity ("Bob no longer owns payments").
 # Motion/completion verbs (dropped/stopped/ended/removed) are NOT here: "Bob
@@ -74,7 +74,8 @@ def decide(conn, block_id: str, vec, key: str = "") -> Tuple[str, Optional[str],
         return "ADD", None, ""
     fid, sim, old_key = nearest
 
-    if sim >= config.UPDATE_SIM:
+    reinforce_sim, update_sim = corpus.bands(conn)
+    if sim >= update_sim:
         # anchor guard: if each statement carries an identity token the other
         # lacks (orders vs refunds, Tuesday vs Thursday), these are two TRUE
         # sibling facts however similar the wording — merging/retiring either
@@ -84,7 +85,7 @@ def decide(conn, block_id: str, vec, key: str = "") -> Tuple[str, Optional[str],
         # same topic: does the new statement contradict (negate) the old one?
         if _contradicts(old_key, key):
             return "DELETE", fid, ""
-        if sim >= config.REINFORCE_SIM:
+        if sim >= reinforce_sim:
             return "REINFORCE", fid, ""
         return "UPDATE", fid, ""
 

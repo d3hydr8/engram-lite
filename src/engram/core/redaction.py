@@ -7,6 +7,7 @@ the DB. Heuristic (offline) — covers the common shapes; not a full DLP scanner
 """
 from __future__ import annotations
 
+import math
 import re
 from typing import List, Tuple
 
@@ -26,6 +27,23 @@ _PATTERNS: list[tuple[str, re.Pattern]] = [
 # "api_key=...", "password: ...", "token = ..." — redact the value, keep the label
 _KV_SECRET = re.compile(r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[:=]\s*)[\"']?[^\s\"']{8,}")
 
+_BLOB = re.compile(r"\b[A-Za-z0-9+/_-]{24,100}\b")
+
+
+def _entropy(s: str) -> float:
+    counts: dict = {}
+    for c in s:
+        counts[c] = counts.get(c, 0) + 1
+    total = len(s)
+    return -sum((n / total) * math.log2(n / total) for n in counts.values())
+
+
+def _looks_secret(tok: str) -> bool:
+    if not (any(c.isupper() for c in tok) and any(c.islower() for c in tok)
+            and any(c.isdigit() for c in tok)):
+        return False
+    return _entropy(tok) >= 3.6
+
 
 def scrub(text: str) -> Tuple[str, List[str]]:
     """Return (clean_text, kinds_found). clean_text has secrets replaced with markers."""
@@ -35,6 +53,15 @@ def scrub(text: str) -> Tuple[str, List[str]]:
         if pat.search(clean):
             found.append(kind)
             clean = pat.sub(f"<redacted:{kind}>", clean)
+
+    def _blob(m: re.Match) -> str:
+        tok = m.group(0)
+        if _looks_secret(tok):
+            found.append("high_entropy")
+            return "<redacted:high_entropy>"
+        return tok
+
+    clean = _BLOB.sub(_blob, clean)
 
     def _kv(m: re.Match) -> str:
         found.append("generic_secret")
